@@ -1466,6 +1466,16 @@ function App() {
           </div>
         )}
       </main>
+      <footer className="px-4 pb-6 pt-2 text-center text-xs text-[#2C2C2C]/55">
+        <a
+          href="https://beian.miit.gov.cn/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="transition-colors hover:text-[#B22222] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B22222]/40"
+        >
+          琼ICP备2026012986号
+        </a>
+      </footer>
     </div>
   );
 }
