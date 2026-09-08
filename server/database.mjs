@@ -67,6 +67,13 @@ function parseEncryptedJson(value, fallback = {}) {
   }
 }
 
+export function normalizeContact(contact = {}) {
+  return {
+    phone: String(contact.phone || '').replace(/[^\d+]/g, ''),
+    email: String(contact.email || '').trim().toLowerCase()
+  };
+}
+
 async function runStatements(client, statements) {
   for (const statement of statements) {
     await client.query(statement);
@@ -112,6 +119,10 @@ export async function ensureDatabase() {
         coupon_balance INTEGER NOT NULL DEFAULT 0,
         payment_status TEXT NOT NULL DEFAULT 'unpaid',
         latest_payment_provider TEXT,
+        phone_cipher TEXT,
+        phone_hash TEXT,
+        email_cipher TEXT,
+        email_hash TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (month_key, sequence)
@@ -136,6 +147,8 @@ export async function ensureDatabase() {
         report_cipher TEXT NOT NULL,
         zen_cipher TEXT NOT NULL,
         notebook_key TEXT NOT NULL,
+        generation_status TEXT NOT NULL DEFAULT 'generated',
+        generation_error TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (month_key, sequence)
@@ -158,6 +171,7 @@ export async function ensureDatabase() {
         gateway_order_no TEXT,
         request_cipher TEXT NOT NULL,
         response_cipher TEXT,
+        paid_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
@@ -198,6 +212,18 @@ export async function ensureDatabase() {
       `
       CREATE INDEX IF NOT EXISTS idx_ip_access_events_hash_time
       ON ip_access_events (ip_hash, visited_at DESC)
+      `,
+      `ALTER TABLE user_records ADD COLUMN IF NOT EXISTS phone_cipher TEXT`,
+      `ALTER TABLE user_records ADD COLUMN IF NOT EXISTS phone_hash TEXT`,
+      `ALTER TABLE user_records ADD COLUMN IF NOT EXISTS email_cipher TEXT`,
+      `ALTER TABLE user_records ADD COLUMN IF NOT EXISTS email_hash TEXT`,
+      `ALTER TABLE report_records ADD COLUMN IF NOT EXISTS generation_status TEXT NOT NULL DEFAULT 'generated'`,
+      `ALTER TABLE report_records ADD COLUMN IF NOT EXISTS generation_error TEXT`,
+      `ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`,
+      `CREATE INDEX IF NOT EXISTS idx_user_records_phone_hash ON user_records (phone_hash)`,
+      `CREATE INDEX IF NOT EXISTS idx_user_records_email_hash ON user_records (email_hash)`,
+      `CREATE INDEX IF NOT EXISTS idx_payment_orders_status_created ON payment_orders (status, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_report_records_session_created ON report_records (session_id, created_at DESC)
       `
     ]);
     initialized = true;
@@ -261,6 +287,7 @@ export async function upsertUserRecord(record) {
   const bias = normalizeAssessment(record.bias);
   const ipHash = hashLookupValue(record.ip, 'ip');
   const nameHash = hashLookupValue(record.name, 'name');
+  const contact = normalizeContact(record);
 
   const params = [
     record.id || crypto.randomUUID(),
@@ -281,7 +308,11 @@ export async function upsertUserRecord(record) {
     record.mediaSource || 'organic',
     Number(record.couponBalance ?? 0),
     record.paymentStatus || (record.plan === 'paid' ? 'paid' : 'unpaid'),
-    record.latestPaymentProvider || null
+    record.latestPaymentProvider || null,
+    contact.phone ? encryptString(contact.phone, monthKey) : null,
+    contact.phone ? hashLookupValue(contact.phone, 'phone') : null,
+    contact.email ? encryptString(contact.email, monthKey) : null,
+    contact.email ? hashLookupValue(contact.email, 'email') : null
   ];
 
   const result = await activePool.query(`
@@ -305,10 +336,14 @@ export async function upsertUserRecord(record) {
       coupon_balance,
       payment_status,
       latest_payment_provider,
+      phone_cipher,
+      phone_hash,
+      email_cipher,
+      email_hash,
       created_at,
       updated_at
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),NOW()
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NOW(),NOW()
     )
     ON CONFLICT (session_id) DO UPDATE SET
       month_key = EXCLUDED.month_key,
@@ -328,6 +363,10 @@ export async function upsertUserRecord(record) {
       coupon_balance = EXCLUDED.coupon_balance,
       payment_status = EXCLUDED.payment_status,
       latest_payment_provider = EXCLUDED.latest_payment_provider,
+      phone_cipher = COALESCE(EXCLUDED.phone_cipher, user_records.phone_cipher),
+      phone_hash = COALESCE(EXCLUDED.phone_hash, user_records.phone_hash),
+      email_cipher = COALESCE(EXCLUDED.email_cipher, user_records.email_cipher),
+      email_hash = COALESCE(EXCLUDED.email_hash, user_records.email_hash),
       updated_at = NOW()
     RETURNING id, month_key, sequence, session_id, plan, media_source, coupon_balance, payment_status, latest_payment_provider
   `, params);
@@ -407,10 +446,12 @@ export async function upsertReportRecord(record) {
       report_cipher,
       zen_cipher,
       notebook_key,
+      generation_status,
+      generation_error,
       created_at,
       updated_at
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW()
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),NOW()
     )
     ON CONFLICT (month_key, sequence) DO UPDATE SET
       session_id = EXCLUDED.session_id,
@@ -419,6 +460,8 @@ export async function upsertReportRecord(record) {
       report_cipher = EXCLUDED.report_cipher,
       zen_cipher = EXCLUDED.zen_cipher,
       notebook_key = EXCLUDED.notebook_key,
+      generation_status = EXCLUDED.generation_status,
+      generation_error = EXCLUDED.generation_error,
       updated_at = NOW()
     RETURNING id, notebook_key
   `, [
@@ -430,7 +473,9 @@ export async function upsertReportRecord(record) {
     record.zenTitle || '智能禅语',
     encryptString(record.report || '', monthKey),
     encryptString(record.zenMessage || '', monthKey),
-    record.notebookKey
+    record.notebookKey,
+    record.generationStatus || 'generated',
+    record.generationError || null
   ]);
 
   return result.rows[0] || null;
@@ -605,7 +650,7 @@ export async function completePaymentOrder(orderId, paymentResult) {
     const responseCipher = encryptString(JSON.stringify(paymentResult.raw || {}), current.monthKey);
     const updated = await client.query(`
       UPDATE payment_orders
-      SET status = 'paid', gateway_order_no = $2, response_cipher = $3, updated_at = NOW()
+      SET status = 'paid', gateway_order_no = $2, response_cipher = $3, paid_at = COALESCE(paid_at, NOW()), updated_at = NOW()
       WHERE id = $1
       RETURNING *
     `, [orderId, paymentResult.gatewayOrderNo || null, responseCipher]);
@@ -664,6 +709,261 @@ export async function appendPaymentCallback(callback) {
   ]);
 
   return result.rows[0] || null;
+}
+
+function decryptOptional(value) {
+  return value ? decryptString(value) : '';
+}
+
+export function mapAdminUserRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    monthKey: row.month_key,
+    sequence: Number(row.sequence),
+    sessionId: row.session_id,
+    ip: decryptOptional(row.ip_cipher),
+    name: decryptOptional(row.name_cipher),
+    phone: decryptOptional(row.phone_cipher),
+    email: decryptOptional(row.email_cipher),
+    plan: row.plan,
+    birthBazi: decryptOptional(row.birth_bazi_cipher),
+    birthPlace: decryptOptional(row.birth_place_cipher),
+    gender: decryptOptional(row.gender_cipher),
+    couponBalance: Number(row.coupon_balance || 0),
+    paymentStatus: row.payment_status,
+    latestPaymentProvider: row.latest_payment_provider || '',
+    reportDurationMs: Number(row.report_duration_ms || 0),
+    reportId: row.report_id || null,
+    latestPaymentId: row.latest_payment_id || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+export function mapAdminPaymentRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    monthKey: row.month_key,
+    sequence: row.sequence == null ? null : Number(row.sequence),
+    sessionId: row.session_id || '',
+    provider: row.provider,
+    channel: row.channel,
+    status: row.status,
+    currency: row.currency,
+    amountMinor: Number(row.amount_minor || 0),
+    couponUsedMinor: Number(row.coupon_used_minor || 0),
+    payableMinor: Number(row.payable_minor || 0),
+    gatewayOrderNo: row.gateway_order_no || '',
+    userId: row.user_id || null,
+    userName: decryptOptional(row.user_name_cipher),
+    userPhone: decryptOptional(row.user_phone_cipher),
+    reportId: row.report_id || null,
+    createdAt: row.created_at,
+    paidAt: row.paid_at || null,
+    updatedAt: row.updated_at
+  };
+}
+
+export function mapAdminReportRow(row, { includeContent = true } = {}) {
+  if (!row) return null;
+  const mapped = {
+    id: row.id,
+    monthKey: row.month_key,
+    sequence: Number(row.sequence),
+    sessionId: row.session_id,
+    reportTitle: row.report_title,
+    zenTitle: row.zen_title,
+    status: row.generation_status || 'generated',
+    error: row.generation_error || '',
+    notebookKey: row.notebook_key,
+    userId: row.user_id || null,
+    userName: decryptOptional(row.user_name_cipher),
+    paymentStatus: row.payment_status || 'unpaid',
+    paymentOrderId: row.payment_order_id || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+  if (includeContent) {
+    mapped.report = decryptOptional(row.report_cipher);
+    mapped.zenMessage = decryptOptional(row.zen_cipher);
+  }
+  return mapped;
+}
+
+function adminSearchHashes(query) {
+  const raw = String(query || '').trim();
+  const contact = normalizeContact({ phone: raw, email: raw });
+  return {
+    raw,
+    nameHash: raw ? hashLookupValue(raw, 'name') : null,
+    phoneHash: contact.phone ? hashLookupValue(contact.phone, 'phone') : null,
+    emailHash: contact.email ? hashLookupValue(contact.email, 'email') : null
+  };
+}
+
+export async function updateUserContact(sessionId, contactInput = {}) {
+  const activePool = getPool();
+  if (!activePool || !sessionId) return null;
+  const contact = normalizeContact(contactInput);
+  if (!contact.phone && !contact.email) return null;
+  const result = await activePool.query(`
+    UPDATE user_records
+    SET
+      phone_cipher = CASE WHEN $2::text IS NULL THEN phone_cipher ELSE $2 END,
+      phone_hash = CASE WHEN $3::text IS NULL THEN phone_hash ELSE $3 END,
+      email_cipher = CASE WHEN $4::text IS NULL THEN email_cipher ELSE $4 END,
+      email_hash = CASE WHEN $5::text IS NULL THEN email_hash ELSE $5 END,
+      updated_at = NOW()
+    WHERE session_id = $1
+    RETURNING id
+  `, [
+    sessionId,
+    contact.phone ? encryptString(contact.phone) : null,
+    contact.phone ? hashLookupValue(contact.phone, 'phone') : null,
+    contact.email ? encryptString(contact.email) : null,
+    contact.email ? hashLookupValue(contact.email, 'email') : null
+  ]);
+  return result.rows[0] || null;
+}
+
+export async function listAdminUsers({ monthKey = '', status = '', query = '', limit = 20, offset = 0 } = {}) {
+  const activePool = getPool();
+  if (!activePool) return { items: [], total: 0 };
+  const search = adminSearchHashes(query);
+  const params = [monthKey || null, status || null, search.raw || null, search.nameHash, search.phoneHash, search.emailHash, limit, offset];
+  const where = `
+    ($1::text IS NULL OR u.month_key = $1)
+    AND ($2::text IS NULL OR u.payment_status = $2)
+    AND ($3::text IS NULL OR u.id = $3 OR u.session_id = $3 OR u.sequence::text = $3 OR u.name_hash = $4 OR u.phone_hash = $5 OR u.email_hash = $6)
+  `;
+  const [rows, count] = await Promise.all([
+    activePool.query(`
+      SELECT u.*, report.id AS report_id, payment.id AS latest_payment_id
+      FROM user_records u
+      LEFT JOIN LATERAL (SELECT id FROM report_records WHERE session_id = u.session_id ORDER BY created_at DESC LIMIT 1) report ON TRUE
+      LEFT JOIN LATERAL (SELECT id FROM payment_orders WHERE session_id = u.session_id ORDER BY created_at DESC LIMIT 1) payment ON TRUE
+      WHERE ${where}
+      ORDER BY u.created_at DESC
+      LIMIT $7 OFFSET $8
+    `, params),
+    activePool.query(`SELECT COUNT(*)::int AS total FROM user_records u WHERE ${where}`, params.slice(0, 6))
+  ]);
+  return { items: rows.rows.map(mapAdminUserRow), total: Number(count.rows[0]?.total || 0) };
+}
+
+export async function getAdminUserById(id) {
+  const activePool = getPool();
+  if (!activePool || !id) return null;
+  const result = await activePool.query(`
+    SELECT u.*, report.id AS report_id, payment.id AS latest_payment_id
+    FROM user_records u
+    LEFT JOIN LATERAL (SELECT id FROM report_records WHERE session_id = u.session_id ORDER BY created_at DESC LIMIT 1) report ON TRUE
+    LEFT JOIN LATERAL (SELECT id FROM payment_orders WHERE session_id = u.session_id ORDER BY created_at DESC LIMIT 1) payment ON TRUE
+    WHERE u.id = $1
+    LIMIT 1
+  `, [id]);
+  return mapAdminUserRow(result.rows[0]);
+}
+
+export async function listAdminPayments({ monthKey = '', status = '', provider = '', query = '', limit = 20, offset = 0 } = {}) {
+  const activePool = getPool();
+  if (!activePool) return { items: [], total: 0 };
+  const search = adminSearchHashes(query);
+  const params = [monthKey || null, status || null, provider || null, search.raw || null, search.nameHash, search.phoneHash, search.emailHash, limit, offset];
+  const where = `
+    ($1::text IS NULL OR p.month_key = $1)
+    AND ($2::text IS NULL OR p.status = $2)
+    AND ($3::text IS NULL OR p.provider = $3)
+    AND ($4::text IS NULL OR p.id = $4 OR p.gateway_order_no = $4 OR p.session_id = $4 OR u.name_hash = $5 OR u.phone_hash = $6 OR u.email_hash = $7)
+  `;
+  const select = `
+    SELECT p.id, p.month_key, p.sequence, p.session_id, p.provider, p.channel, p.status, p.currency,
+      p.amount_minor, p.coupon_used_minor, p.payable_minor, p.gateway_order_no, p.created_at, p.paid_at, p.updated_at,
+      u.id AS user_id, u.name_cipher AS user_name_cipher, u.phone_cipher AS user_phone_cipher, report.id AS report_id
+    FROM payment_orders p
+    LEFT JOIN user_records u ON u.session_id = p.session_id
+    LEFT JOIN LATERAL (SELECT id FROM report_records WHERE session_id = p.session_id ORDER BY created_at DESC LIMIT 1) report ON TRUE
+  `;
+  const [rows, count] = await Promise.all([
+    activePool.query(`${select} WHERE ${where} ORDER BY p.created_at DESC LIMIT $8 OFFSET $9`, params),
+    activePool.query(`SELECT COUNT(*)::int AS total FROM payment_orders p LEFT JOIN user_records u ON u.session_id = p.session_id WHERE ${where}`, params.slice(0, 7))
+  ]);
+  return { items: rows.rows.map(mapAdminPaymentRow), total: Number(count.rows[0]?.total || 0) };
+}
+
+export async function getAdminPaymentById(id) {
+  const activePool = getPool();
+  if (!activePool || !id) return null;
+  const result = await activePool.query(`
+    SELECT p.id, p.month_key, p.sequence, p.session_id, p.provider, p.channel, p.status, p.currency,
+      p.amount_minor, p.coupon_used_minor, p.payable_minor, p.gateway_order_no, p.created_at, p.paid_at, p.updated_at,
+      u.id AS user_id, u.name_cipher AS user_name_cipher, u.phone_cipher AS user_phone_cipher, report.id AS report_id
+    FROM payment_orders p
+    LEFT JOIN user_records u ON u.session_id = p.session_id
+    LEFT JOIN LATERAL (SELECT id FROM report_records WHERE session_id = p.session_id ORDER BY created_at DESC LIMIT 1) report ON TRUE
+    WHERE p.id = $1
+    LIMIT 1
+  `, [id]);
+  return mapAdminPaymentRow(result.rows[0]);
+}
+
+export async function listAdminReports({ monthKey = '', status = '', query = '', limit = 20, offset = 0 } = {}) {
+  const activePool = getPool();
+  if (!activePool) return { items: [], total: 0 };
+  const search = adminSearchHashes(query);
+  const params = [monthKey || null, status || null, search.raw || null, search.nameHash, search.phoneHash, search.emailHash, limit, offset];
+  const where = `
+    ($1::text IS NULL OR r.month_key = $1)
+    AND ($2::text IS NULL OR r.generation_status = $2)
+    AND ($3::text IS NULL OR r.id = $3 OR r.session_id = $3 OR r.sequence::text = $3 OR u.name_hash = $4 OR u.phone_hash = $5 OR u.email_hash = $6)
+  `;
+  const select = `
+    SELECT r.*, u.id AS user_id, u.name_cipher AS user_name_cipher, u.payment_status,
+      payment.id AS payment_order_id
+    FROM report_records r
+    LEFT JOIN user_records u ON u.session_id = r.session_id
+    LEFT JOIN LATERAL (SELECT id FROM payment_orders WHERE session_id = r.session_id AND status = 'paid' ORDER BY paid_at DESC NULLS LAST, created_at DESC LIMIT 1) payment ON TRUE
+  `;
+  const [rows, count] = await Promise.all([
+    activePool.query(`${select} WHERE ${where} ORDER BY r.created_at DESC LIMIT $7 OFFSET $8`, params),
+    activePool.query(`SELECT COUNT(*)::int AS total FROM report_records r LEFT JOIN user_records u ON u.session_id = r.session_id WHERE ${where}`, params.slice(0, 6))
+  ]);
+  return { items: rows.rows.map((row) => mapAdminReportRow(row, { includeContent: false })), total: Number(count.rows[0]?.total || 0) };
+}
+
+export async function getAdminReportById(id) {
+  const activePool = getPool();
+  if (!activePool || !id) return null;
+  const result = await activePool.query(`
+    SELECT r.*, u.id AS user_id, u.name_cipher AS user_name_cipher, u.payment_status,
+      payment.id AS payment_order_id
+    FROM report_records r
+    LEFT JOIN user_records u ON u.session_id = r.session_id
+    LEFT JOIN LATERAL (SELECT id FROM payment_orders WHERE session_id = r.session_id AND status = 'paid' ORDER BY paid_at DESC NULLS LAST, created_at DESC LIMIT 1) payment ON TRUE
+    WHERE r.id = $1
+    LIMIT 1
+  `, [id]);
+  return mapAdminReportRow(result.rows[0]);
+}
+
+export async function getAdminOverview(monthKey = '') {
+  const activePool = getPool();
+  if (!activePool) return null;
+  const [users, payments, reports] = await Promise.all([
+    activePool.query(`SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE payment_status = 'paid')::int AS paid FROM user_records WHERE ($1::text IS NULL OR month_key = $1)`, [monthKey || null]),
+    activePool.query(`SELECT COUNT(*) FILTER (WHERE status = 'pending')::int AS pending, COALESCE(SUM(payable_minor) FILTER (WHERE status = 'paid'), 0)::bigint AS revenue FROM payment_orders WHERE ($1::text IS NULL OR month_key = $1)`, [monthKey || null]),
+    activePool.query(`SELECT COUNT(*) FILTER (WHERE generation_status = 'generated')::int AS generated, COUNT(*) FILTER (WHERE generation_status = 'failed')::int AS failed FROM report_records WHERE ($1::text IS NULL OR month_key = $1)`, [monthKey || null])
+  ]);
+  return {
+    totalUsers: Number(users.rows[0]?.total || 0),
+    paidUsers: Number(users.rows[0]?.paid || 0),
+    pendingPayments: Number(payments.rows[0]?.pending || 0),
+    revenueMinor: Number(payments.rows[0]?.revenue || 0),
+    generatedReports: Number(reports.rows[0]?.generated || 0),
+    failedReports: Number(reports.rows[0]?.failed || 0)
+  };
 }
 
 export async function createDecryptAuditLog(entry) {

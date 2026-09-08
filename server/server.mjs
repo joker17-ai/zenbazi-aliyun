@@ -21,6 +21,7 @@ import {
   isDatabaseEnabled,
   nextSequence as nextDatabaseSequence,
   trackIpAccess,
+  updateUserContact,
   upsertReportRecord,
   upsertUserRecord
 } from './database.mjs';
@@ -327,7 +328,9 @@ async function upsertUserInfoRecord(record) {
       mediaSource: record.mediaSource,
       couponBalance: record.couponBalance,
       paymentStatus: record.paymentStatus,
-      latestPaymentProvider: record.latestPaymentProvider
+      latestPaymentProvider: record.latestPaymentProvider,
+      phone: record.phone,
+      email: record.email
     });
   }
 }
@@ -646,7 +649,9 @@ async function processReportJob(job) {
     mediaSource: payload.userInfo.mediaSource || 'organic',
     couponBalance: payload.userInfo.couponBalance ?? 0,
     paymentStatus: payload.userInfo.paymentStatus || (payload.userInfo.plan === 'paid' ? 'paid' : 'unpaid'),
-    latestPaymentProvider: payload.userInfo.latestPaymentProvider || ''
+    latestPaymentProvider: payload.userInfo.latestPaymentProvider || '',
+    phone: payload.userInfo.phone,
+    email: payload.userInfo.email
   });
   if (isDatabaseEnabled()) {
     await upsertReportRecord({
@@ -990,6 +995,12 @@ const server = http.createServer(async (req, res) => {
       const reportKey = `reports/${monthKey}/${sequence}-report.html`;
 
       await storage.putText(reportKey, html);
+      if (isDatabaseEnabled()) {
+        await updateUserContact(payload.userInfo?.sessionId || payload.sessionId, {
+          phone: payload.phone,
+          email: payload.email
+        });
+      }
       console.log('✅ HTML报告已保存:', reportKey);
 
       let signedUrl = null;
