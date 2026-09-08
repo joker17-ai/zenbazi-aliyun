@@ -19,6 +19,8 @@ function normalizeValue(raw) {
     .replace(/\\t/g, '\t');
 }
 
+const externallyProvidedKeys = new Set(Object.keys(process.env));
+
 function loadEnvFile(fileName) {
   const filePath = path.join(ROOT, fileName);
   if (!existsSync(filePath)) return;
@@ -34,6 +36,7 @@ function loadEnvFile(fileName) {
     if (!match) continue;
 
     const [, key, rawValue] = match;
+    if (externallyProvidedKeys.has(key)) continue;
     process.env[key] = normalizeValue(rawValue);
   }
 }

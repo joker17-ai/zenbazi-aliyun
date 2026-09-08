@@ -367,6 +367,30 @@ export async function getUserRecordsByMonth(monthKey = getCurrentMonthKey()) {
   }));
 }
 
+export async function getUserRecordBySessionId(sessionId) {
+  const activePool = getPool();
+  if (!activePool || !sessionId) return null;
+
+  const result = await activePool.query(`
+    SELECT id, month_key, sequence, session_id, plan, coupon_balance, payment_status, latest_payment_provider
+    FROM user_records
+    WHERE session_id = $1
+    LIMIT 1
+  `, [sessionId]);
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    monthKey: row.month_key,
+    sequence: Number(row.sequence),
+    sessionId: row.session_id,
+    plan: row.plan,
+    couponBalance: Number(row.coupon_balance || 0),
+    paymentStatus: row.payment_status,
+    latestPaymentProvider: row.latest_payment_provider
+  };
+}
+
 export async function upsertReportRecord(record) {
   const activePool = getPool();
   if (!activePool) return null;
@@ -468,7 +492,7 @@ export async function createPaymentOrder(order) {
     ) VALUES (
       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW(),NOW()
     )
-    RETURNING id, status, provider, channel, currency, amount_minor, coupon_used_minor, payable_minor
+    RETURNING *
   `, [
     order.id || crypto.randomUUID(),
     monthKey,
@@ -487,7 +511,7 @@ export async function createPaymentOrder(order) {
     order.responsePayload ? encryptString(JSON.stringify(order.responsePayload), monthKey) : null
   ]);
 
-  return result.rows[0] || null;
+  return mapPaymentOrderRecord(result.rows[0]);
 }
 
 export async function updatePaymentOrder(orderId, patch = {}) {
@@ -516,14 +540,102 @@ export async function updatePaymentOrder(orderId, patch = {}) {
       response_cipher = $4,
       updated_at = NOW()
     WHERE id = $1
-    RETURNING id, status, gateway_order_no
+    RETURNING *
   `, [
     orderId,
     patch.status || current.status,
     patch.gatewayOrderNo || null,
     responseCipher
   ]);
-  return result.rows[0] || null;
+  return mapPaymentOrderRecord(result.rows[0]);
+}
+
+export function mapPaymentOrderRecord(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    monthKey: row.month_key,
+    sequence: row.sequence == null ? null : Number(row.sequence),
+    sessionId: row.session_id,
+    provider: row.provider,
+    channel: row.channel,
+    status: row.status,
+    currency: row.currency,
+    amountMinor: Number(row.amount_minor || 0),
+    couponUsedMinor: Number(row.coupon_used_minor || 0),
+    payableMinor: Number(row.payable_minor || 0),
+    planAfterSuccess: row.plan_after_success,
+    gatewayOrderNo: row.gateway_order_no,
+    requestPayload: parseEncryptedJson(row.request_cipher, {}),
+    responsePayload: row.response_cipher ? parseEncryptedJson(row.response_cipher, {}) : null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+export async function getPaymentOrderById(orderId) {
+  const activePool = getPool();
+  if (!activePool || !orderId) return null;
+  const result = await activePool.query('SELECT * FROM payment_orders WHERE id = $1 LIMIT 1', [orderId]);
+  return mapPaymentOrderRecord(result.rows[0]);
+}
+
+export async function completePaymentOrder(orderId, paymentResult) {
+  const activePool = getPool();
+  if (!activePool) return null;
+  const client = await activePool.connect();
+  try {
+    await client.query('BEGIN');
+    const selected = await client.query('SELECT * FROM payment_orders WHERE id = $1 FOR UPDATE', [orderId]);
+    const current = mapPaymentOrderRecord(selected.rows[0]);
+    if (!current) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    if (current.status === 'paid') {
+      await client.query('COMMIT');
+      return { order: current, completed: false };
+    }
+    if (current.provider !== paymentResult.provider
+      || current.currency !== paymentResult.currency
+      || current.payableMinor !== Number(paymentResult.amountMinor)) {
+      throw new Error('Payment result does not match the stored order');
+    }
+
+    const responseCipher = encryptString(JSON.stringify(paymentResult.raw || {}), current.monthKey);
+    const updated = await client.query(`
+      UPDATE payment_orders
+      SET status = 'paid', gateway_order_no = $2, response_cipher = $3, updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [orderId, paymentResult.gatewayOrderNo || null, responseCipher]);
+
+    const entitlementUpdate = await client.query(`
+      UPDATE user_records
+      SET
+        plan = $2,
+        coupon_balance = GREATEST(0, coupon_balance - $3),
+        payment_status = 'paid',
+        latest_payment_provider = $4,
+        updated_at = NOW()
+      WHERE session_id = $1
+    `, [current.sessionId, current.planAfterSuccess || 'paid', Math.round(current.couponUsedMinor / 100), current.provider]);
+    assertPaymentUserUpdated(entitlementUpdate.rowCount);
+
+    await client.query('COMMIT');
+    return { order: mapPaymentOrderRecord(updated.rows[0]), completed: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export function assertPaymentUserUpdated(rowCount) {
+  if (Number(rowCount) !== 1) {
+    throw new Error('Payment completed without a matching user record');
+  }
 }
 
 export async function appendPaymentCallback(callback) {

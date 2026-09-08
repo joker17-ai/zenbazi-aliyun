@@ -14,20 +14,19 @@ import { generateHtmlReport } from './reportGenerator.mjs';
 import { isSmsEnabled, sendSms } from './sms.mjs';
 import { isMailEnabled, sendMail } from './mailer.mjs';
 import {
-  appendPaymentCallback,
   createDecryptAuditLog,
-  createPaymentOrder,
   ensureDatabase,
   getReportRecord,
   getUserRecordsByMonth,
   isDatabaseEnabled,
   nextSequence as nextDatabaseSequence,
   trackIpAccess,
-  updatePaymentOrder,
   upsertReportRecord,
   upsertUserRecord
 } from './database.mjs';
 import { createJobRecord, createQueueDriver } from './queue.mjs';
+import { matchPaymentRoute, parseFormBody, readBoundedBody } from './payments/http.mjs';
+import { createPaymentService } from './payments/service.mjs';
 import {
   decryptString,
   encryptString,
@@ -58,6 +57,7 @@ const queueDriver = createQueueDriver();
 const clients = new Map();
 const ipAccessLog = new Map();
 const sequenceCache = new Map();
+const paymentService = createPaymentService();
 
 // 动态用户计数器 - 用于显示"已有X用户获取了深度解析"
 let userAnalysisCount = 10000; // 初始值10000
@@ -152,17 +152,6 @@ function safeAverage(items, getter) {
   return items.length ? Math.round(items.reduce((sum, item) => sum + getter(item), 0) / items.length) : 0;
 }
 
-function getPaymentProvider(paymentMethod = 'wechat') {
-  return paymentMethod;
-}
-
-function getPaymentCurrency(paymentMethod = 'wechat', fallback = '') {
-  if (fallback) {
-    return fallback;
-  }
-  return paymentMethod === 'wechat' ? 'CNY' : 'USD';
-}
-
 async function applyRateLimit(ip, plan = 'free') {
   if (RATE_LIMIT_SUSPENDED) {
     return { blocked: false };
@@ -211,6 +200,15 @@ function sendJson(res, statusCode, payload) {
     'Cross-Origin-Resource-Policy': 'same-origin'
   });
   res.end(JSON.stringify(payload));
+}
+
+function sendText(res, statusCode, payload) {
+  res.writeHead(statusCode, {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff'
+  });
+  res.end(String(payload));
 }
 
 function pushJobUpdate(jobId, payload) {
@@ -709,97 +707,6 @@ async function processFeedbackJob(job) {
   return { couponBalance, accuracy, bias };
 }
 
-async function processPaymentJob(job) {
-  const { payload } = job;
-  const monthKey = payload.monthKey || getCurrentMonthKey();
-  const basePriceCny = Number(payload.priceCny || 68);
-  const currentCouponBalance = Number(payload.couponBalance || 0);
-  const couponUsed = payload.useCouponDeduction
-    ? Math.max(0, Math.min(currentCouponBalance, basePriceCny))
-    : 0;
-  const couponBalance = Math.max(0, currentCouponBalance - couponUsed);
-  const payableCny = Math.max(0, basePriceCny - couponUsed);
-  const plan = 'paid';
-  const paymentProvider = getPaymentProvider(payload.paymentMethod || 'wechat');
-  const currency = getPaymentCurrency(payload.paymentMethod || 'wechat', payload.currencyCode || '');
-  const paymentOrder = isDatabaseEnabled() ? await createPaymentOrder({
-    monthKey,
-    sequence: payload.sequence,
-    sessionId: payload.sessionId,
-    provider: paymentProvider,
-    status: 'paid',
-    currency,
-    amountMinor: Math.round(basePriceCny * 100),
-    couponUsedMinor: Math.round(couponUsed * 100),
-    payableMinor: Math.round(payableCny * 100),
-    requestPayload: payload,
-    responsePayload: {
-      simulated: true,
-      settledAt: new Date().toISOString()
-    }
-  }) : null;
-  if (paymentOrder) {
-    await appendPaymentCallback({
-      paymentOrderId: paymentOrder.id,
-      provider: paymentProvider,
-      callbackStatus: 'paid',
-      monthKey,
-      payload: {
-        simulated: true,
-        sequence: payload.sequence,
-        sessionId: payload.sessionId,
-        provider: paymentProvider
-      }
-    });
-    await updatePaymentOrder(paymentOrder.id, {
-      status: 'paid',
-      gatewayOrderNo: `SIM-${payload.sequence}-${Date.now()}`,
-      responsePayload: {
-        simulated: true,
-        paid: true
-      }
-    });
-  }
-
-  await upsertUserInfoRecord({
-    monthKey,
-    sequence: payload.sequence,
-    sessionId: payload.sessionId,
-    ip: payload.ip || job.ip,
-    plan,
-    birthBazi: payload.birthBazi,
-    name: payload.name,
-    birthPlace: payload.birthPlace,
-    gender: payload.gender,
-    reportDurationMs: payload.reportDurationMs || 0,
-    accuracy: payload.accuracy || {},
-    bias: payload.bias || {},
-    mediaSource: payload.mediaSource || 'organic',
-    couponBalance,
-    paymentStatus: 'paid',
-    latestPaymentProvider: paymentProvider
-  });
-
-  return {
-    plan,
-    couponUsed,
-    couponBalance,
-    payableCny,
-    paymentMethod: payload.paymentMethod || 'wechat',
-    paymentOrderId: paymentOrder?.id || null,
-    paymentProvider,
-    paymentStatus: 'paid',
-    simulated: true,
-    userInfo: {
-      plan,
-      couponBalance,
-      monthKey,
-      paymentStatus: 'paid',
-      latestPaymentProvider: paymentProvider
-    }
-  };
-}
-
 async function processTranslateJob(job) {
   const { payload } = job;
   const texts = payload.texts || {};
@@ -822,7 +729,6 @@ async function processJob(job) {
   if (job.type === 'chart') return processChartJob(job);
   if (job.type === 'report') return processReportJob(job);
   if (job.type === 'feedback') return processFeedbackJob(job);
-  if (job.type === 'payment') return processPaymentJob(job);
   if (job.type === 'translate') return processTranslateJob(job);
   throw new Error(`Unknown job type: ${job.type}`);
 }
@@ -871,6 +777,35 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   try {
+    const paymentRoute = matchPaymentRoute(req.method, url.pathname);
+    if (paymentRoute?.action === 'config') {
+      sendJson(res, 200, paymentService.getConfigStatus());
+      return;
+    }
+    if (paymentRoute?.action === 'create') {
+      const payload = await readJsonBody(req);
+      sendJson(res, 201, await paymentService.createOrder(payload));
+      return;
+    }
+    if (paymentRoute?.action === 'status') {
+      sendJson(res, 200, await paymentService.getOrder({
+        orderId: paymentRoute.orderId,
+        token: url.searchParams.get('token')
+      }));
+      return;
+    }
+    if (paymentRoute?.action === 'notify') {
+      const rawBody = await readBoundedBody(req);
+      if (paymentRoute.provider === 'wechat') {
+        await paymentService.handleNotification('wechat', { headers: req.headers, body: rawBody });
+        sendJson(res, 200, { code: 'SUCCESS', message: '成功' });
+      } else {
+        await paymentService.handleNotification('alipay', { params: parseFormBody(rawBody), body: rawBody });
+        sendText(res, 200, 'success');
+      }
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/jobs/chart') {
       const payload = await readJsonBody(req);
       const job = await enqueueJob('chart', payload, req);
@@ -893,9 +828,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/jobs/payment') {
-      const payload = await readJsonBody(req);
-      const job = await enqueueJob('payment', payload, req);
-      sendJson(res, 202, { jobId: job.id, status: job.status, bufferZone: job.bufferZone });
+      sendJson(res, 410, {
+        error: 'The simulated payment endpoint has been disabled. Use /api/payments/orders.'
+      });
       return;
     }
 
@@ -1092,8 +1027,8 @@ const server = http.createServer(async (req, res) => {
 
     sendJson(res, 404, { error: 'Not found' });
   } catch (error) {
-    const status = error.message === RATE_LIMIT_MESSAGE ? 429 : error.message === 'Unauthorized' ? 401 : 500;
-    sendJson(res, status, { error: error.message });
+    const status = Number(error.status) || (error.message === RATE_LIMIT_MESSAGE ? 429 : error.message === 'Unauthorized' ? 401 : 500);
+    sendJson(res, status, { error: error.message, code: error.code || 'INTERNAL_ERROR' });
   }
 });
 

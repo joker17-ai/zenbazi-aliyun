@@ -80,6 +80,20 @@ copy .env.example .env.local
 ### 3. 关键环境变量
 
 - `DATABASE_URL`：PostgreSQL 连接串
+
+## 微信支付与支付宝直连
+
+后端提供以下支付接口：
+
+- `GET /api/payments/config`：检查数据库及支付渠道是否完成配置（不返回密钥）
+- `POST /api/payments/orders`：创建微信 Native 或支付宝扫码订单
+- `GET /api/payments/orders/:orderId?token=...`：安全查询并同步订单状态
+- `POST /api/payments/wechat/notify`：微信支付 API v3 回调
+- `POST /api/payments/alipay/notify`：支付宝异步通知
+
+生产环境必须先配置 PostgreSQL、`PAYMENT_CALLBACK_BASE_URL` 和 `PAYMENT_TOKEN_SECRET`。微信还需要 APPID、商户号、API v3 密钥、商户私钥、商户证书序列号、微信支付公钥及对应公钥 ID；支付宝需要应用 ID、支付宝商户 UID、应用私钥及支付宝公钥。完整变量名见 `.env.example`。
+
+旧接口 `POST /api/jobs/payment` 不再模拟支付成功。只有通过微信或支付宝签名验证，并且商户号、应用 ID、订单号、币种和金额与数据库订单完全一致时，后端才会将订单设为已支付并解锁权益。密钥只应写入服务器 `.env.local`，不得提交到 Git。
 - `PGHOST` / `PGPORT` / `PGDATABASE` / `PGUSER` / `PGPASSWORD`
 - `REDIS_URL`：云 Redis 连接串
 - `REDIS_QUEUE_NAME`：队列名称
