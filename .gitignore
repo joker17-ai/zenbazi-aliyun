@@ -11,6 +11,7 @@ lerna-debug.log*
 !.env.example
 aliyun_key
 .tmp_*
+.superpowers/
 
 # node_modules
 node_modules
