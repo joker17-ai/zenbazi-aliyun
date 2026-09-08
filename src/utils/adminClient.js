@@ -181,9 +181,50 @@ async function adminFetch(path, options = {}) {
   });
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data.error || 'Request failed');
+    const error = new Error(data.error || 'Request failed');
+    error.status = response.status;
+    error.code = data.code || 'REQUEST_FAILED';
+    throw error;
   }
   return data;
+}
+
+function buildAdminQuery(params = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') continue;
+    query.set(key, String(value));
+  }
+  const encoded = query.toString();
+  return encoded ? `?${encoded}` : '';
+}
+
+export async function getAdminOverview(params = {}) {
+  return adminFetch(`/api/admin/overview${buildAdminQuery(params)}`);
+}
+
+export async function listAdminUsers(params = {}) {
+  return adminFetch(`/api/admin/users${buildAdminQuery(params)}`);
+}
+
+export async function getAdminUser(id) {
+  return adminFetch(`/api/admin/users/${encodeURIComponent(id)}`);
+}
+
+export async function listAdminPayments(params = {}) {
+  return adminFetch(`/api/admin/payments${buildAdminQuery(params)}`);
+}
+
+export async function getAdminPayment(id) {
+  return adminFetch(`/api/admin/payments/${encodeURIComponent(id)}`);
+}
+
+export async function listAdminReports(params = {}) {
+  return adminFetch(`/api/admin/reports${buildAdminQuery(params)}`);
+}
+
+export async function getAdminReport(id) {
+  return adminFetch(`/api/admin/reports/${encodeURIComponent(id)}`);
 }
 
 export async function loginAdmin(credentials) {
