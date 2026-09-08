@@ -1,282 +1,75 @@
-import { useEffect, useMemo, useState } from 'react';
-import { decryptAdminReport, getAdminMetrics, hasAdminToken, loginAdmin, logoutAdmin } from '../utils/adminClient.js';
+import { useCallback, useState } from 'react';
+import { LayoutDashboard, LogOut, ReceiptText, Sparkles, UsersRound } from 'lucide-react';
+import { hasAdminToken, loginAdmin, logoutAdmin } from '../utils/adminClient.js';
 import { translations } from '../utils/translations.js';
+import AdminOverview from './admin/AdminOverview.jsx';
+import AdminPayments from './admin/AdminPayments.jsx';
+import AdminReports from './admin/AdminReports.jsx';
+import AdminUsers from './admin/AdminUsers.jsx';
 
-function StatCard({ label, value }) {
-  return (
-    <div className="rounded-2xl border border-[#2C2C2C]/10 bg-white p-5 shadow-sm">
-      <p className="text-sm text-[#2C2C2C]/60">{label}</p>
-      <p className="mt-2 text-2xl font-bold text-[#B22222]">{value}</p>
-    </div>
-  );
+const tabs = [
+  { id: 'overview', label: '数据总览', icon: LayoutDashboard },
+  { id: 'users', label: '用户管理', icon: UsersRound },
+  { id: 'payments', label: '付款订单', icon: ReceiptText },
+  { id: 'reports', label: '生成内容', icon: Sparkles }
+];
+
+function currentMonthKey() {
+  const now = new Date();
+  return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthInputValue(monthKey) {
+  return `${monthKey.slice(0, 4)}-${monthKey.slice(4, 6)}`;
 }
 
 export default function AdminDashboard({ lang, onExit }) {
   const t = translations[lang] || translations['zh-CN'];
-  const copy = t.admin;
+  const copy = t.admin || translations['zh-CN'].admin;
   const isLocalBypass = Boolean(import.meta.env?.DEV);
-  const displayValue = (value) => (value === undefined || value === null || value === '' ? '-' : String(value));
   const [credentials, setCredentials] = useState({ username: '', password: '' });
-  const [monthKey, setMonthKey] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
-  });
-  const [metrics, setMetrics] = useState(null);
-  const [sequence, setSequence] = useState('');
-  const [decrypted, setDecrypted] = useState(null);
+  const [monthKey, setMonthKey] = useState(currentMonthKey);
+  const [activeTab, setActiveTab] = useState('overview');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [isAuthed, setIsAuthed] = useState(isLocalBypass ? true : hasAdminToken());
-  const accuracyLabels = {
-    industry: t.feedbackPanel.industry,
-    role: t.feedbackPanel.role,
-    wealth: t.feedbackPanel.wealth,
-    body: t.feedbackPanel.body,
-    status: t.feedbackPanel.status,
-    overall: copy.accuracy
-  };
 
-  const accuracyList = useMemo(() => {
-    if (!metrics) return [];
-    return ['industry', 'role', 'wealth', 'body', 'status', 'overall']
-      .filter((key) => Object.hasOwn(metrics.feedbackAccuracy || {}, key))
-      .map((key) => [accuracyLabels[key] || key, metrics.feedbackAccuracy[key]]);
-  }, [accuracyLabels, copy.accuracy, metrics]);
-
-  const refreshMetrics = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const data = await getAdminMetrics(monthKey);
-      setMetrics(data);
-    } catch (err) {
-      setError(isLocalBypass ? '' : err.message);
-      if (!isLocalBypass && /unauthorized/i.test(err.message)) {
-        setIsAuthed(false);
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (isAuthed) {
-      refreshMetrics();
-    }
-  }, [isAuthed, monthKey]);
+  const onUnauthorized = useCallback(() => {
+    logoutAdmin();
+    setIsAuthed(false);
+    setError('登录已过期，请重新登录。');
+  }, []);
 
   if (!isAuthed && !isLocalBypass) {
     return (
       <div className="mx-auto w-full max-w-md rounded-3xl border border-[#2C2C2C]/10 bg-[#F5F0E6] p-8 shadow-xl">
-        <h1 className="text-2xl font-bold font-serif text-[#2C2C2C]">{copy.login}</h1>
+        <h1 className="font-serif text-2xl font-bold text-[#2C2C2C]">{copy.login}</h1>
         <p className="mt-2 text-sm text-[#2C2C2C]/65">{copy.loginHint}</p>
         <div className="mt-6 space-y-4">
-          <input
-            value={credentials.username}
-            onChange={(event) => setCredentials((prev) => ({ ...prev, username: event.target.value }))}
-            placeholder={copy.username}
-            className="w-full rounded-xl border border-[#2C2C2C]/10 bg-white px-4 py-3 outline-none focus:border-[#B22222]"
-          />
-          <input
-            type="password"
-            value={credentials.password}
-            onChange={(event) => setCredentials((prev) => ({ ...prev, password: event.target.value }))}
-            placeholder={copy.password}
-            className="w-full rounded-xl border border-[#2C2C2C]/10 bg-white px-4 py-3 outline-none focus:border-[#B22222]"
-          />
+          <input value={credentials.username} onChange={(event) => setCredentials((current) => ({ ...current, username: event.target.value }))} placeholder={copy.username} className="w-full rounded-xl border border-[#2C2C2C]/10 bg-white px-4 py-3 outline-none focus:border-[#B22222]" />
+          <input type="password" value={credentials.password} onChange={(event) => setCredentials((current) => ({ ...current, password: event.target.value }))} placeholder={copy.password} className="w-full rounded-xl border border-[#2C2C2C]/10 bg-white px-4 py-3 outline-none focus:border-[#B22222]" />
           {error && <p className="text-sm text-[#B22222]">{error}</p>}
-          <button
-            type="button"
-            onClick={async () => {
-              setLoading(true);
-              setError('');
-              try {
-                await loginAdmin(credentials);
-                setIsAuthed(true);
-              } catch (err) {
-                setError(err.message);
-              } finally {
-                setLoading(false);
-              }
-            }}
-            disabled={loading}
-            className="w-full rounded-xl bg-[#B22222] px-5 py-3 font-bold text-[#F5F0E6] transition-colors hover:bg-[#8B1A1A] disabled:bg-[#2C2C2C]/30"
-          >
-            {copy.signIn}
-          </button>
-          <button
-            type="button"
-            onClick={onExit}
-            className="w-full rounded-xl border border-[#2C2C2C]/10 bg-white px-5 py-3 font-bold text-[#2C2C2C]"
-          >
-            {t.title}
-          </button>
+          <button type="button" disabled={loading} onClick={async () => { setLoading(true); setError(''); try { await loginAdmin(credentials); setIsAuthed(true); } catch (loginError) { setError(loginError.message); } finally { setLoading(false); } }} className="w-full rounded-xl bg-[#B22222] px-5 py-3 font-bold text-[#F5F0E6] transition hover:bg-[#8B1A1A] disabled:bg-[#2C2C2C]/30">{loading ? '登录中…' : copy.signIn}</button>
+          <button type="button" onClick={onExit} className="w-full rounded-xl border border-[#2C2C2C]/10 bg-white px-5 py-3 font-bold text-[#2C2C2C]">{t.title}</button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-8">
-      <div className="rounded-3xl border border-[#2C2C2C]/10 bg-[#F5F0E6] p-8 shadow-xl">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold font-serif text-[#2C2C2C]">{copy.title}</h1>
-            <p className="mt-2 text-sm text-[#2C2C2C]/65">{copy.subtitle}</p>
-            {isLocalBypass && (
-              <p className="mt-2 text-xs text-[#B22222]">本机开发模式已启用后台免登录，仅限 localhost / 127.0.0.1。</p>
-            )}
-          </div>
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={onExit}
-              className="rounded-xl border border-[#2C2C2C]/10 bg-white px-4 py-3 text-sm font-bold text-[#2C2C2C]"
-            >
-              {t.title}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                logoutAdmin();
-                setIsAuthed(false);
-                setMetrics(null);
-              }}
-              className="rounded-xl bg-[#2C2C2C] px-4 py-3 text-sm font-bold text-white"
-            >
-              {copy.signOut}
-            </button>
-          </div>
+    <div className="mx-auto w-full max-w-7xl space-y-6">
+      <header className="rounded-3xl border border-[#2C2C2C]/10 bg-[#F5F0E6] p-6 shadow-xl md:p-8">
+        <div className="flex flex-wrap items-start justify-between gap-5">
+          <div><p className="text-xs font-bold uppercase tracking-[0.24em] text-[#B22222]">ZenBazi / Control Room</p><h1 className="mt-2 font-serif text-3xl font-bold text-[#2C2C2C]">{copy.title}</h1><p className="mt-2 text-sm text-[#2C2C2C]/65">用户、付款与生成内容集中管理</p>{isLocalBypass && <p className="mt-2 text-xs text-[#B22222]">本机开发模式已启用后台免登录，仅限 localhost / 127.0.0.1。</p>}</div>
+          <div className="flex flex-wrap items-center gap-2"><label className="text-xs font-bold text-[#2C2C2C]/55">数据月份 <input type="month" value={monthInputValue(monthKey)} onChange={(event) => setMonthKey(event.target.value.replace('-', ''))} className="ml-2 rounded-xl border border-[#2C2C2C]/10 bg-white px-3 py-2 text-sm font-normal text-[#2C2C2C] outline-none focus:border-[#B22222]" /></label><button type="button" onClick={onExit} className="rounded-xl border border-[#2C2C2C]/10 bg-white px-4 py-2.5 text-sm font-bold text-[#2C2C2C]">{t.title}</button><button type="button" onClick={() => { logoutAdmin(); setIsAuthed(false); }} className="inline-flex items-center gap-2 rounded-xl bg-[#2C2C2C] px-4 py-2.5 text-sm font-bold text-white"><LogOut size={15} />退出</button></div>
         </div>
-
-        <div className="mt-6 flex flex-wrap gap-3">
-          <input
-            value={monthKey}
-            onChange={(event) => setMonthKey(event.target.value)}
-            placeholder={copy.month}
-            className="rounded-xl border border-[#2C2C2C]/10 bg-white px-4 py-3 outline-none focus:border-[#B22222]"
-          />
-          <button
-            type="button"
-            onClick={refreshMetrics}
-            disabled={loading}
-            className="rounded-xl bg-[#B22222] px-5 py-3 font-bold text-[#F5F0E6] disabled:bg-[#2C2C2C]/30"
-          >
-            {copy.refresh}
-          </button>
-        </div>
-      </div>
-
-      {error && <div className="rounded-2xl border border-[#B22222]/20 bg-[#B22222]/5 px-4 py-3 text-[#B22222]">{error}</div>}
-
-      {metrics && (
-        <>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-            <StatCard label={copy.totalRecords} value={metrics.totalRecords} />
-            <StatCard label={copy.paidUsers} value={metrics.paidUsers} />
-            <StatCard label={copy.freeUsers} value={metrics.freeUsers} />
-            <StatCard label={copy.totalCoupons} value={metrics.totalCoupons} />
-            <StatCard label={copy.avgDuration} value={`${metrics.averageReportDurationMs} ms`} />
-          </div>
-
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <div className="rounded-3xl border border-[#2C2C2C]/10 bg-[#F5F0E6] p-6 shadow-sm">
-              <h2 className="text-xl font-bold font-serif text-[#2C2C2C]">{copy.accuracy}</h2>
-              <div className="mt-5 space-y-4">
-                {accuracyList.map(([key, value]) => (
-                  <div key={key}>
-                    <div className="mb-1 flex items-center justify-between text-sm">
-                      <span className="text-[#2C2C2C]/70">{key}</span>
-                      <span className="font-bold text-[#B22222]">{value}</span>
-                    </div>
-                    <div className="h-2 rounded-full bg-white">
-                      <div className="h-2 rounded-full bg-[#B22222]" style={{ width: `${value}%` }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-3xl border border-[#2C2C2C]/10 bg-[#F5F0E6] p-6 shadow-sm">
-              <h2 className="text-xl font-bold font-serif text-[#2C2C2C]">{copy.decryptTitle}</h2>
-              <div className="mt-5 flex flex-wrap gap-3">
-                <input
-                  value={sequence}
-                  onChange={(event) => setSequence(event.target.value)}
-                  placeholder={copy.sequence}
-                  className="min-w-[12rem] flex-1 rounded-xl border border-[#2C2C2C]/10 bg-white px-4 py-3 outline-none focus:border-[#B22222]"
-                />
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setLoading(true);
-                    setError('');
-                    try {
-                      const data = await decryptAdminReport(Number(sequence));
-                      setDecrypted(data.notebook);
-                    } catch (err) {
-                      setError(isLocalBypass ? '' : err.message);
-                    } finally {
-                      setLoading(false);
-                    }
-                  }}
-                  disabled={loading || !sequence}
-                  className="rounded-xl bg-[#B22222] px-5 py-3 font-bold text-[#F5F0E6] disabled:bg-[#2C2C2C]/30"
-                >
-                  {copy.decrypt}
-                </button>
-              </div>
-
-              <div className="mt-6">
-                <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-[#2C2C2C]/55">{copy.decryptedReport}</h3>
-                <pre className="mt-3 max-h-[22rem] overflow-auto rounded-2xl bg-white p-4 text-xs leading-6 text-[#2C2C2C]/80">
-                  {decrypted ? JSON.stringify(decrypted, null, 2) : '—'}
-                </pre>
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-[#2C2C2C]/10 bg-[#F5F0E6] p-6 shadow-sm">
-            <h2 className="text-xl font-bold font-serif text-[#2C2C2C]">{copy.latestRecords}</h2>
-            <div className="mt-5 overflow-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="border-b border-[#2C2C2C]/10 text-left text-[#2C2C2C]/60">
-                    <th className="px-3 py-2">{copy.sequence}</th>
-                    <th className="px-3 py-2">{copy.ip}</th>
-                    <th className="px-3 py-2">{t.name}</th>
-                    <th className="px-3 py-2">{t.cloud.planLabel}</th>
-                    <th className="px-3 py-2">{copy.birthBazi}</th>
-                    <th className="px-3 py-2">{copy.birthPlace}</th>
-                    <th className="px-3 py-2">{t.gender}</th>
-                    <th className="px-3 py-2">{t.cloud.couponLabel}</th>
-                    <th className="px-3 py-2">{copy.mediaSource}</th>
-                    <th className="px-3 py-2">{copy.avgDuration}</th>
-                    <th className="px-3 py-2">{copy.accuracy}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {metrics.latestRecords.map((item) => (
-                    <tr key={item.sequence} className="border-b border-[#2C2C2C]/5">
-                      <td className="px-3 py-2">{item.sequence}</td>
-                      <td className="px-3 py-2">{displayValue(item.ip)}</td>
-                      <td className="px-3 py-2">{displayValue(item.name)}</td>
-                      <td className="px-3 py-2 uppercase">{displayValue(item.plan)}</td>
-                      <td className="px-3 py-2">{displayValue(item.birthBazi)}</td>
-                      <td className="px-3 py-2">{displayValue(item.birthPlace)}</td>
-                      <td className="px-3 py-2">{displayValue(item.gender)}</td>
-                      <td className="px-3 py-2">{displayValue(item.couponBalance)}</td>
-                      <td className="px-3 py-2">{displayValue(item.mediaSource)}</td>
-                      <td className="px-3 py-2">{displayValue(item.reportDurationMs)}</td>
-                      <td className="px-3 py-2">{displayValue(item.accuracyOverall)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
-      )}
+        <nav className="mt-7 flex gap-2 overflow-x-auto border-t border-[#2C2C2C]/10 pt-4" aria-label="后台导航">{tabs.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => { setActiveTab(id); setError(''); }} className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition ${activeTab === id ? 'bg-[#B22222] text-white shadow-sm' : 'bg-white/70 text-[#2C2C2C]/65 hover:bg-white'}`}><Icon size={16} />{label}</button>)}</nav>
+      </header>
+      {error && <div className="rounded-2xl border border-[#B22222]/20 bg-[#B22222]/5 px-4 py-3 text-sm text-[#8B1A1A]">{error}</div>}
+      {activeTab === 'overview' && <AdminOverview monthKey={monthKey} onUnauthorized={onUnauthorized} />}
+      {activeTab === 'users' && <AdminUsers monthKey={monthKey} onUnauthorized={onUnauthorized} />}
+      {activeTab === 'payments' && <AdminPayments monthKey={monthKey} onUnauthorized={onUnauthorized} />}
+      {activeTab === 'reports' && <AdminReports monthKey={monthKey} onUnauthorized={onUnauthorized} />}
     </div>
   );
 }

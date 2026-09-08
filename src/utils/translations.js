@@ -215,7 +215,7 @@ export const translations = {
     restartAnalysis: "重新排盘",
     admin: {
       title: "云端镜像安全后台",
-      subtitle: "管理员可查看反馈统计、最近记录，并在线解密 Notebook 报告。",
+      subtitle: "管理员可查看用户、付款订单与付款后生成内容。",
       login: "管理员登录",
       username: "用户名",
       password: "密码",
@@ -239,7 +239,14 @@ export const translations = {
       sequence: "序号",
       decrypt: "解密报告",
       decryptedReport: "解密结果",
-      loginHint: "请使用管理员账号进入后台。"
+      loginHint: "请使用管理员账号进入后台。",
+      overview: "数据总览",
+      users: "用户管理",
+      payments: "付款订单",
+      reports: "生成内容",
+      search: "搜索",
+      empty: "暂无符合条件的数据",
+      databaseRequired: "后台数据库尚未启用"
     }
   },
   'zh-TW': {
