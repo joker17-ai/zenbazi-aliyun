@@ -26,6 +26,8 @@ import {
   upsertUserRecord
 } from './database.mjs';
 import { createJobRecord, createQueueDriver } from './queue.mjs';
+import { matchAdminRoute } from './admin/http.mjs';
+import { createAdminService } from './admin/service.mjs';
 import { matchPaymentRoute, parseFormBody, readBoundedBody } from './payments/http.mjs';
 import { createPaymentService } from './payments/service.mjs';
 import {
@@ -59,6 +61,7 @@ const clients = new Map();
 const ipAccessLog = new Map();
 const sequenceCache = new Map();
 const paymentService = createPaymentService();
+const adminService = createAdminService();
 
 // 动态用户计数器 - 用于显示"已有X用户获取了深度解析"
 let userAnalysisCount = 10000; // 初始值10000
@@ -921,6 +924,47 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const adminRoute = matchAdminRoute(req.method, url.pathname);
+    if (adminRoute) {
+      const admin = requireAdmin(req);
+      if (adminRoute.action === 'overview') {
+        sendJson(res, 200, await adminService.getOverview(url.searchParams));
+        return;
+      }
+      if (adminRoute.action === 'users') {
+        sendJson(res, 200, await adminService.listUsers(url.searchParams));
+        return;
+      }
+      if (adminRoute.action === 'user') {
+        sendJson(res, 200, await adminService.getUser(adminRoute.id));
+        return;
+      }
+      if (adminRoute.action === 'payments') {
+        sendJson(res, 200, await adminService.listPayments(url.searchParams));
+        return;
+      }
+      if (adminRoute.action === 'payment') {
+        sendJson(res, 200, await adminService.getPayment(adminRoute.id));
+        return;
+      }
+      if (adminRoute.action === 'reports') {
+        sendJson(res, 200, await adminService.listReports(url.searchParams));
+        return;
+      }
+      if (adminRoute.action === 'report') {
+        const report = await adminService.getReport(adminRoute.id);
+        await createDecryptAuditLog({
+          targetType: 'report_record',
+          targetKey: report.id,
+          monthKey: report.monthKey,
+          operatorName: admin.sub || 'admin',
+          dynamicInstruction: getDynamicInstruction(report.monthKey)
+        });
+        sendJson(res, 200, report);
+        return;
+      }
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/admin/metrics') {
       if (!isDevMode()) {
         requireAdmin(req);
@@ -930,7 +974,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === 'GET' && url.pathname === '/api/dev/admin-metrics') {
+    if (req.method === 'GET' && url.pathname === '/api/dev/admin-metrics' && isDevMode() && isLocalRequest(req)) {
       const monthKey = url.searchParams.get('month') || getCurrentMonthKey();
       try {
         sendJson(res, 200, await buildAdminMetricsDebug(monthKey));
