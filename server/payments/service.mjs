@@ -61,6 +61,8 @@ function publicOrder(order, accessToken, codeUrl = order.responsePayload?.codeUr
     payableMinor: order.payableMinor,
     currency: order.currency,
     codeUrl,
+    redirectUrl: order.responsePayload?.redirectUrl,
+    jsapi: order.responsePayload?.jsapi,
     expiresAt: order.requestPayload?.expiresAt,
     accessToken
   };
@@ -152,7 +154,7 @@ export function createPaymentService({
         requestPayload: { productId: product.id, expiresAt, useCouponDeduction: Boolean(input.useCouponDeduction) }
       });
 
-      const tokenExpiresAt = Date.now() + 30 * 60_000;
+      const tokenExpiresAt = Date.now() + 7 * 24 * 60 * 60_000;
       const accessToken = createPaymentAccessToken({ orderId, sessionId, expiresAt: tokenExpiresAt }, tokenSecret);
       if (payableMinor === 0) {
         const completed = await repository.completeOrder(orderId, {
@@ -167,6 +169,10 @@ export function createPaymentService({
 
       const gateway = await provider.createOrder({
         ...order,
+        scene: input.scene,
+        openId: input.openId,
+        clientIp: input.clientIp,
+        returnUrl: `${callbackOrigin}/?checkout=resume`,
         description: product.description,
         notifyUrl: `${callbackOrigin}/api/payments/${providerName}/notify`,
         expiresAt
@@ -174,7 +180,7 @@ export function createPaymentService({
       const updated = await repository.updateOrder(orderId, {
         status: 'pending',
         gatewayOrderNo: gateway.gatewayOrderNo,
-        responsePayload: { codeUrl: gateway.codeUrl }
+        responsePayload: { codeUrl: gateway.codeUrl, redirectUrl: gateway.redirectUrl, jsapi: gateway.jsapi }
       });
       return publicOrder(updated || { ...order, responsePayload: { codeUrl: gateway.codeUrl } }, accessToken, gateway.codeUrl);
     },

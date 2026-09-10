@@ -111,9 +111,12 @@ export function createWechatProvider({ env = process.env, fetchImpl = globalThis
   return {
     ...config,
     async createOrder(order) {
+      const scene = order.scene || 'native';
+      if (!['native', 'h5', 'jsapi'].includes(scene)) throw new PaymentError('Invalid payment scene', { status: 400 });
+      if (scene === 'jsapi' && !order.openId) throw new PaymentError('请先完成微信身份授权', { status: 400 });
       const data = await callWechatApi({
         method: 'POST',
-        path: '/v3/pay/transactions/native',
+        path: `/v3/pay/transactions/${scene}`,
         config,
         fetchImpl,
         body: {
@@ -123,10 +126,18 @@ export function createWechatProvider({ env = process.env, fetchImpl = globalThis
           out_trade_no: order.id,
           notify_url: order.notifyUrl,
           time_expire: order.expiresAt,
-          amount: { total: order.payableMinor, currency: order.currency }
+          amount: { total: order.payableMinor, currency: order.currency },
+          ...(scene === 'h5' ? { scene_info: { payer_client_ip: order.clientIp, h5_info: { type: 'Wap' } } } : {}),
+          ...(scene === 'jsapi' ? { payer: { openid: order.openId } } : {})
         }
       });
-      return { codeUrl: data.code_url, gatewayOrderNo: null, raw: data };
+      let jsapi;
+      if (scene === 'jsapi') {
+        if (!data.prepay_id) throw new PaymentError('Missing prepay id', { status: 502 });
+        jsapi = { appId: config.appId, timeStamp: String(Math.floor(Date.now() / 1000)), nonceStr: crypto.randomBytes(16).toString('hex'), package: `prepay_id=${data.prepay_id}`, signType: 'RSA' };
+        jsapi.paySign = crypto.sign('RSA-SHA256', Buffer.from(`${jsapi.appId}\n${jsapi.timeStamp}\n${jsapi.nonceStr}\n${jsapi.package}\n`), config.privateKey).toString('base64');
+      }
+      return { codeUrl: data.code_url, redirectUrl: data.h5_url ? `${data.h5_url}&redirect_url=${encodeURIComponent(order.returnUrl)}` : undefined, jsapi, gatewayOrderNo: null, raw: data };
     },
     async queryOrder(order) {
       const path = `/v3/pay/transactions/out-trade-no/${encodeURIComponent(order.id)}?mchid=${encodeURIComponent(config.mchId)}`;

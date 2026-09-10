@@ -30,6 +30,7 @@ import { matchAdminRoute } from './admin/http.mjs';
 import { createAdminService } from './admin/service.mjs';
 import { matchPaymentRoute, parseFormBody, readBoundedBody } from './payments/http.mjs';
 import { createPaymentService } from './payments/service.mjs';
+import { chooseScene, wechatIdentity, handleWechatOAuth } from './payments/browser.mjs';
 import {
   decryptString,
   encryptString,
@@ -786,13 +787,20 @@ const server = http.createServer(async (req, res) => {
 
   try {
     const paymentRoute = matchPaymentRoute(req.method, url.pathname);
+    if (await handleWechatOAuth(req, res, url)) return;
     if (paymentRoute?.action === 'config') {
       sendJson(res, 200, paymentService.getConfigStatus());
       return;
     }
     if (paymentRoute?.action === 'create') {
       const payload = await readJsonBody(req);
-      sendJson(res, 201, await paymentService.createOrder(payload));
+      const scene = chooseScene(payload.provider, req.headers['user-agent']);
+      const openId = scene === 'jsapi' ? wechatIdentity(req) : undefined;
+      if (scene === 'jsapi' && !openId) {
+        sendJson(res, 200, { authorizeUrl: '/api/payments/wechat/authorize' });
+        return;
+      }
+      sendJson(res, 201, await paymentService.createOrder({ ...payload, scene, openId, clientIp: getClientIp(req) }));
       return;
     }
     if (paymentRoute?.action === 'status') {

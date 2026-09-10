@@ -71,6 +71,14 @@ export function createAlipayProvider({ env = process.env, sdk } = {}) {
   return {
     ...config,
     async createOrder(order) {
+      if (order.scene === 'wap') {
+        const redirectUrl = getClient().pageExec('alipay.trade.wap.pay', 'GET', {
+          notifyUrl: order.notifyUrl,
+          returnUrl: order.returnUrl,
+          bizContent: { outTradeNo: order.id, totalAmount: (order.payableMinor / 100).toFixed(2), subject: order.description, productCode: 'QUICK_WAP_WAY', timeoutExpress: '15m', quitUrl: order.returnUrl }
+        });
+        return { redirectUrl, gatewayOrderNo: null };
+      }
       const data = await getClient().exec('alipay.trade.precreate', {
         notifyUrl: order.notifyUrl,
         bizContent: {

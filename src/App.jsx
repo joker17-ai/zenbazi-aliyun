@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
+import UnifiedCheckout, { paymentRequest } from './components/UnifiedCheckout.jsx';
 import { Sparkles, Loader2, AlertCircle, TrendingUp, Lock, BadgeCheck, QrCode, CreditCard, Wallet, Globe, TicketPercent, Smartphone } from 'lucide-react'
 import { createJob, runOptionalJob, waitForJob } from './utils/cloudClient'
 import { translations, ELEMENT_MAPPING } from './utils/translations'
@@ -246,6 +247,16 @@ function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isFeedbackSubmitting, setIsFeedbackSubmitting] = useState(false);
   const [isPaymentSubmitting, setIsPaymentSubmitting] = useState(false);
+  const [checkoutOrder, setCheckoutOrder] = useState(null);
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('zb_checkout') || 'null');
+      if (!saved || Date.now() - saved.savedAt > 7 * 24 * 3600000) return;
+      setUserInfo(saved.userInfo); setBaziResult(saved.baziResult);
+      setAiAnalysis(saved.aiAnalysis); setRawAiAnalysis(saved.rawAiAnalysis);
+      setStage(3); setCheckoutOrder(saved.order || null);
+    } catch { /* Ignore unavailable or malformed browser storage. */ }
+  }, []);
   const [isEnglishTranslationPending, setIsEnglishTranslationPending] = useState(false);
   const [error, setError] = useState(null);
   const [lang, setLang] = useState('zh-CN');
@@ -258,7 +269,7 @@ function App() {
   const premiumUnlocked = isPremiumUnlocked || stage === 4
   const hasPaidPlan = userInfo?.plan === 'paid'
   // 地区检测逻辑
-  const useGlobalPaymentMethods = lang === 'en' || Boolean(userInfo?.isOverseas)
+  const useGlobalPaymentMethods = false
   // 国内：¥68，国际：¥128（统一人民币）
   const basePriceCny = useGlobalPaymentMethods ? 128 : 68
   // 统一人民币计价
@@ -633,31 +644,22 @@ function App() {
     setError(null)
 
     try {
-      const { jobId } = await createJob('payment', {
-        sequence: userInfo.sequence,
+      const pending = JSON.parse(localStorage.getItem('zb_checkout') || 'null');
+      if (pending?.order && pending.userInfo?.sessionId === userInfo.sessionId) {
+        setCheckoutOrder(pending.order);
+        return;
+      }
+      const saved = { userInfo, baziResult, aiAnalysis, rawAiAnalysis, savedAt: Date.now() };
+      localStorage.setItem('zb_checkout', JSON.stringify(saved));
+      const result = await paymentRequest('/api/payments/orders', {
         sessionId: userInfo.sessionId,
-        ip: userInfo.ip,
-        plan: userInfo.plan || 'free',
-        birthBazi: baziResult.pillars.map((pillar) => typeof pillar === 'object' ? pillar.char : pillar).reverse().join(' '),
-        name: userInfo.name,
-        birthPlace: userInfo.isOverseas ? userInfo.worldCountry : userInfo.chinaAddress,
-        gender: userInfo.gender,
-        reportDurationMs: 0,
-        mediaSource: userInfo.mediaSource || 'organic',
-        couponBalance: availableCoupons,
-        paymentMethod,
-        useCouponDeduction,
-        priceCny: basePriceCny,
-        currencyCode: paymentCurrencyCode
+        provider: paymentMethod,
+        productId: 'premium',
+        useCouponDeduction
       })
-      const result = await waitForJob(jobId)
-      setUserInfo((prev) => ({
-        ...prev,
-        ...result.userInfo
-      }))
-      setCouponBalance(result.userInfo?.couponBalance ?? 0)
-      setIsPremiumUnlocked(true)
-      setStage(4)
+      if (result.authorizeUrl) { window.location.assign(result.authorizeUrl); return; }
+      localStorage.setItem('zb_checkout', JSON.stringify({ ...saved, order: result }));
+      setCheckoutOrder(result);
     } catch (err) {
       setError(err.message || (lang === 'en' ? 'Payment bridge failed.' : '支付桥梁失败，请稍后重试。'))
     } finally {
@@ -719,9 +721,7 @@ function App() {
       ];
   const paymentActionLabel = payableCny === 0 ? paymentCopy.unlockFree : paymentCopy.unlockPaid;
   // 真实收款二维码映射：(语言地区, 支付方式) -> 图片路径
-  const paymentQrSrc = useGlobalPaymentMethods
-    ? (paymentMethod === 'alipay' ? '/qr/alipay-128.jpg' : '')
-    : (paymentMethod === 'wechat' ? '/qr/wechat-68.jpg' : paymentMethod === 'alipay' ? '/qr/alipay-68.jpg' : '');
+  const paymentQrSrc = '';
   const paymentQrAmount = useGlobalPaymentMethods ? 128 : 68;
 
   if (route === 'admin') {
@@ -741,6 +741,11 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#F5F0E6] text-[#2C2C2C] font-sans selection:bg-[#B22222] selection:text-[#F5F0E6] text-lg">
+      {checkoutOrder && <UnifiedCheckout order={checkoutOrder} onClose={() => setCheckoutOrder(null)} onPaid={() => {
+        setUserInfo(previous => ({ ...previous, plan: 'paid' }));
+        setIsPremiumUnlocked(true); setStage(4); setCheckoutOrder(null);
+        // Keep the order receipt so a reopened page verifies payment again.
+      }} />}
       <header className="bg-[#F5F0E6] border-b border-[#2C2C2C]/10 sticky top-0 z-50 backdrop-blur-sm bg-opacity-90">
         <div className="container mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-start md:items-center w-full gap-4">
           {/* Logo & Title & Slogan Container */}
@@ -1366,7 +1371,7 @@ function App() {
                                          <div>
                                            <p className="font-semibold text-[#2C2C2C]">{item.label}</p>
                                            <p className="text-sm text-[#2C2C2C]/55">
-                                            {useGlobalPaymentMethods ? paymentCopy.apiPlaceholder : paymentCopy.qrPlaceholder}
+                                            自动选择适合当前设备的付款方式
                                            </p>
                                          </div>
                                        </div>
@@ -1400,10 +1405,10 @@ function App() {
                                ) : (
                                  <>
                                    <div className="w-56 h-56 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center bg-white px-4 text-center">
-                                     <span className="text-sm text-[#2C2C2C]/50">{paymentCopy.qrUnavailable}</span>
+                                     <span className="text-sm text-[#2C2C2C]/50">选择支付方式，点击下方付款按钮即可打开收银台。</span>
                                    </div>
                                    <p className="mt-3 text-xs text-[#2C2C2C]/40 text-center">
-                                     {paymentCopy.qrHint}
+                                     付款成功后自动查询订单并打开报告。
                                    </p>
                                  </>
                                )}
