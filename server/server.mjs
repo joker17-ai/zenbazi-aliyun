@@ -18,6 +18,7 @@ import {
   ensureDatabase,
   getReportRecord,
   getUserRecordsByMonth,
+  getUserRecordBySessionId,
   isDatabaseEnabled,
   nextSequence as nextDatabaseSequence,
   trackIpAccess,
@@ -1033,6 +1034,9 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && url.pathname === '/api/report/generate') {
       const payload = await readJsonBody(req);
+      const reportUser = await getUserRecordBySessionId(payload.userInfo?.sessionId || payload.sessionId || '');
+      if (!reportUser) { sendJson(res, 404, { error: '未找到排盘记录，请重新排盘后生成报告。' }); return; }
+      payload.userInfo = { ...payload.userInfo, sessionId: reportUser.sessionId, sequence: reportUser.sequence, monthKey: reportUser.monthKey };
       console.log('📝 收到报告生成请求:', {
         sequence: payload.userInfo?.sequence,
         name: payload.userInfo?.name,
@@ -1048,6 +1052,11 @@ const server = http.createServer(async (req, res) => {
 
       await storage.putText(reportKey, html);
       if (isDatabaseEnabled()) {
+        await upsertReportRecord({
+          monthKey, sequence, sessionId: reportUser.sessionId,
+          reportTitle: '生命时空密码完整报告', report: html,
+          zenMessage: payload.baziResult?.zenMessage || '', notebookKey: reportKey
+        });
         await updateUserContact(payload.userInfo?.sessionId || payload.sessionId, {
           phone: payload.phone,
           email: payload.email

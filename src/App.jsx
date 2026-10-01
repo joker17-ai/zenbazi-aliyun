@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState, useRef } from 'react'
 import UnifiedCheckout, { paymentRequest } from './components/UnifiedCheckout.jsx';
 import { Sparkles, Loader2, AlertCircle, TrendingUp, Lock, BadgeCheck, QrCode, CreditCard, Wallet, Globe, TicketPercent, Smartphone } from 'lucide-react'
 import { createJob, runOptionalJob, waitForJob } from './utils/cloudClient'
@@ -245,6 +245,7 @@ function App() {
   const [analysisZenMessage, setAnalysisZenMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const chartInFlight = useRef(false);
   const [isFeedbackSubmitting, setIsFeedbackSubmitting] = useState(false);
   const [isPaymentSubmitting, setIsPaymentSubmitting] = useState(false);
   const [checkoutOrder, setCheckoutOrder] = useState(null);
@@ -506,6 +507,8 @@ function App() {
   }, [aiAnalysis, baziResult, isLoading, lang, namingResult, rawAiAnalysis, stage, userInfo])
 
   const requestChartAnalysis = async (payload, options = {}) => {
+    if (chartInFlight.current) return;
+    chartInFlight.current = true;
     const finalData = { ...payload, isEnglish: lang === 'en', lang };
     setIsSubmitting(true);
     setError(null);
@@ -530,6 +533,7 @@ function App() {
     } catch (err) {
       setError(err.message || (lang === 'en' ? 'Cloud analysis failed.' : '云端排盘失败，请稍后重试。'));
     } finally {
+      chartInFlight.current = false;
       setIsSubmitting(false);
     }
   };
@@ -741,6 +745,13 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#F5F0E6] text-[#2C2C2C] font-sans selection:bg-[#B22222] selection:text-[#F5F0E6] text-lg">
+      {isSubmitting && <div role="dialog" aria-modal="true" aria-label="正在排盘" className="fixed inset-0 z-[150] flex items-center justify-center bg-[#F5F0E6]/90 p-6 backdrop-blur-sm" onKeyDown={event => { if (event.key === 'Tab') event.preventDefault(); }} tabIndex={-1} ref={element => element?.focus()}>
+        <div role="status" aria-live="polite" className="text-center">
+          <Loader2 aria-hidden="true" className="mx-auto mb-6 h-14 w-14 animate-spin text-[#B22222] motion-reduce:animate-none" />
+          <h2 className="font-serif text-2xl font-bold">{lang === 'en' ? 'Preparing your chart' : '正在为你排盘'}</h2>
+          <p className="mt-3 text-sm text-[#2C2C2C]/65">{lang === 'en' ? 'Please wait. Your results will appear automatically.' : '请稍候，结果准备好后将自动展示，请勿重复提交。'}</p>
+        </div>
+      </div>}
       {checkoutOrder && <UnifiedCheckout order={checkoutOrder} onClose={() => setCheckoutOrder(null)} onPaid={() => {
         setUserInfo(previous => ({ ...previous, plan: 'paid' }));
         setIsPremiumUnlocked(true); setStage(4); setCheckoutOrder(null);
@@ -822,7 +833,7 @@ function App() {
             </div>
 
              <Suspense fallback={<div className="rounded-xl bg-white/60 p-6 text-center text-[#2C2C2C]/70">{t.calculating}</div>}>
-               <BaZiForm onSubmit={handleCalculate} lang={lang} setLang={setLang} />
+               <BaZiForm onSubmit={handleCalculate} lang={lang} setLang={setLang} isSubmitting={isSubmitting} />
              </Suspense>
              {error && (
               <div className="mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
@@ -1457,7 +1468,7 @@ function App() {
           <div className="w-full max-w-4xl animate-in slide-in-from-right duration-700">
              <Suspense fallback={<div className="rounded-xl bg-white/60 p-6 text-center text-[#2C2C2C]/70">{t.calculating}</div>}>
                <PremiumAdvice
-                 result={baziResult}
+                 result={{ ...baziResult, userInfo, namingResult, analysis: rawAiAnalysis || aiAnalysis }}
                  lang={lang}
                  isUnlocked={premiumUnlocked}
                  couponBalance={userInfo?.couponBalance || 0}

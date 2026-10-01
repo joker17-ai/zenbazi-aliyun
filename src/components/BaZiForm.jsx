@@ -4,7 +4,7 @@ import { birthEnvironments, BAZI_MAPPING } from '../utils/constants';
 import { Solar, Lunar } from 'lunar-javascript';
 import AgreementModal from './AgreementModal';
 
-export default function BaZiForm({ onSubmit, lang, setLang }) {
+export default function BaZiForm({ onSubmit, lang, setLang, isSubmitting = false }) {
   const t = translations[lang] || translations['zh-CN'];
   const getSolarMonthLabel = (monthNumber) => {
     const labels = t.solarMonthShort || t.monthShort;
@@ -243,6 +243,7 @@ export default function BaZiForm({ onSubmit, lang, setLang }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!isAgreed) {
       alert(t.agreement.required);
       return;
@@ -250,17 +251,11 @@ export default function BaZiForm({ onSubmit, lang, setLang }) {
     const safeDate = coreDate || new Date();
     const solarDateStr = `${safeDate.getFullYear()}-${String(safeDate.getMonth() + 1).padStart(2, '0')}-${String(safeDate.getDate()).padStart(2, '0')}`;
     onSubmit({ ...formData, birthDate: solarDateStr, isEnglish: lang === 'en', lunarStrCN, lunarStrEN });
-    // 提交后清除姓名和国家字段（保留其他设置以便用户重新排盘）
-    setFormData(prev => ({
-      ...prev,
-      name: '',
-      chinaAddress: '',
-      worldCountry: ''
-    }));
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4 p-6 bg-[#F5F0E6] rounded-xl border border-[#2C2C2C]/10 shadow-sm">
+      <fieldset disabled={isSubmitting} aria-busy={isSubmitting} className="space-y-4">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold text-[#2C2C2C] font-serif">{lang === 'en' ? 'Input Information' : (lang === 'zh-TW' ? '輸入資訊' : '输入信息')}</h2>
         <button
@@ -529,12 +524,13 @@ export default function BaZiForm({ onSubmit, lang, setLang }) {
       <button
         type="submit"
         className={`w-full py-3 text-[#F5F0E6] font-bold rounded transition-colors shadow-md mt-4 ${isAgreed ? 'bg-[#B22222] hover:bg-[#8B1A1A]' : 'bg-[#2C2C2C]/30 cursor-not-allowed'}`}
-        disabled={!isAgreed}
+        disabled={!isAgreed || isSubmitting}
       >
         {lang === 'en' ? 'Analyze' : (lang === 'zh-TW' ? '分析' : '计算')}
       </button>
 
       <AgreementModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} lang={lang} />
+      </fieldset>
     </form>
   );
 }

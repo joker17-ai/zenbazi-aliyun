@@ -25,6 +25,7 @@ export default function PremiumAdvice({
   const premiumText = t.premiumPanel;
 
   const generateReport = async () => {
+    if (isGeneratingReport) return;
     if (!phoneNumber.trim()) {
       alert(lang === 'en' ? 'Please enter your phone number' : '请输入手机号码');
       return;
@@ -56,6 +57,7 @@ export default function PremiumAdvice({
       });
 
       const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '报告保存失败');
       if (data.success) {
         setReportResult(data);
       }

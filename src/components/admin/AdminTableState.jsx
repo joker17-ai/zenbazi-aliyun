@@ -99,7 +99,7 @@ export function ReportBody({ report }) {
         ['用户', report.userName], ['记录序号', report.sequence], ['付款状态', statusLabels[report.paymentStatus] || report.paymentStatus], ['生成时间', formatDate(report.createdAt)]
       ]} />
       {report.zenMessage && <blockquote className="rounded-2xl border-l-4 border-[#B22222] bg-white px-5 py-4 font-serif text-[#8B1A1A]">{report.zenMessage}</blockquote>}
-      <article className="whitespace-pre-wrap rounded-2xl bg-white p-5 text-sm leading-8 text-[#2C2C2C]/85">{report.report || '报告正文为空'}</article>
+      {/<!doctype html|<html[\s>]/i.test(report.report || '') ? <iframe title="用户生成的完整报告" sandbox="" referrerPolicy="no-referrer" className="h-[70vh] w-full rounded-2xl border bg-white" srcDoc={`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:;">${report.report}`} /> : <article className="whitespace-pre-wrap rounded-2xl bg-white p-5 text-sm leading-8 text-[#2C2C2C]/85">{report.report || '报告正文为空'}</article>}
       <details className="rounded-2xl border border-[#2C2C2C]/10 bg-white p-4 text-xs text-[#2C2C2C]/60">
         <summary className="cursor-pointer font-bold">排查信息</summary>
         <pre className="mt-3 overflow-auto whitespace-pre-wrap">{JSON.stringify({ id: report.id, monthKey: report.monthKey, sessionId: report.sessionId, notebookKey: report.notebookKey }, null, 2)}</pre>
