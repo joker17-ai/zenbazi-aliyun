@@ -1,6 +1,6 @@
 # 统一收银台配置
 
-网站只显示微信和支付宝。电脑使用订单二维码；手机浏览器使用微信 H5 / 支付宝手机网站支付；微信内使用公众号 JSAPI，支付宝提示到外部浏览器打开。
+网站只显示微信和支付宝。电脑使用订单二维码；微信内使用公众号 JSAPI，支付宝提示到外部浏览器打开。微信 H5 默认关闭（`WECHAT_PAY_H5_ENABLED=false`），手机外部浏览器使用 Native 二维码，需要另一台设备扫码；本机付款需从微信打开网站重新进入支付流程。支付宝使用手机网站支付。
 
 ## 填写一个文件
 
@@ -10,8 +10,8 @@
 
 ## 平台端设置
 
-- 微信：开通 Native、H5、JSAPI，将公众号 AppID 与商户号关联。公众号需要网页授权能力。
-- 微信 H5 支付域名：`yuandestiny.cn`。
+- 微信：开通 Native、JSAPI，将公众号 AppID 与商户号关联。公众号需要网页授权能力。
+- H5 审核通过后才可设置 `WECHAT_PAY_H5_ENABLED=true`，并配置 H5 支付域名 `yuandestiny.cn`；目前保持关闭。
 - 公众号网页授权域名：`yuandestiny.cn`；按平台要求上传校验文件。
 - JSAPI 支付授权目录：`https://yuandestiny.cn/`。
 - 微信回调：`https://yuandestiny.cn/api/payments/wechat/notify`。

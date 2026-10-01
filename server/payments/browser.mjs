@@ -1,10 +1,10 @@
 import crypto from 'node:crypto';
 import { createPaymentAccessToken, verifyPaymentAccessToken, PaymentError } from './shared.mjs';
 
-export function chooseScene(provider, userAgent = '') {
+export function chooseScene(provider, userAgent = '', h5Enabled = process.env.WECHAT_PAY_H5_ENABLED === 'true') {
   const wechat = /MicroMessenger/i.test(userAgent);
   const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent);
-  if (provider === 'wechat') return wechat ? 'jsapi' : mobile ? 'h5' : 'native';
+  if (provider === 'wechat') return wechat ? 'jsapi' : mobile && h5Enabled ? 'h5' : 'native';
   if (provider === 'alipay' && wechat) throw new PaymentError('请点击微信右上角“…”并选择在浏览器打开，再使用支付宝付款。', { code: 'OPEN_IN_BROWSER', status: 400 });
   return mobile ? 'wap' : 'native';
 }

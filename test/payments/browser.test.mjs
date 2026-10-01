@@ -5,7 +5,8 @@ import { createAlipayProvider } from '../../server/payments/alipay.mjs';
 
 test('desktop and mobile choose the appropriate direct payment scene', () => {
   assert.equal(chooseScene('wechat', 'Windows Chrome'), 'native');
-  assert.equal(chooseScene('wechat', 'iPhone Safari'), 'h5');
+  assert.equal(chooseScene('wechat', 'iPhone Safari', false), 'native');
+  assert.equal(chooseScene('wechat', 'iPhone Safari', true), 'h5');
   assert.equal(chooseScene('wechat', 'Android MicroMessenger'), 'jsapi');
   assert.equal(chooseScene('alipay', 'Android Chrome'), 'wap');
   assert.equal(chooseScene('alipay', 'Windows Chrome'), 'native');

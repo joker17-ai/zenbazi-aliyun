@@ -83,7 +83,7 @@ async function callWechatApi({ method, path, body, config, fetchImpl }) {
   });
   const response = await fetchImpl(`${WECHAT_API_ORIGIN}${path}`, {
     method,
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: authorization },
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: authorization, 'Wechatpay-Serial': config.publicKeyId },
     body: bodyText || undefined,
     signal: AbortSignal.timeout(10_000)
   });

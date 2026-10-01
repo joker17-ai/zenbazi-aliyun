@@ -42,6 +42,7 @@ export default function UnifiedCheckout({ order, onPaid, onClose }) {
     <h2 className="font-serif text-2xl text-[#2C2C2C]">{order.provider === 'wechat' ? '微信支付' : '支付宝'}</h2>
     <p className="my-4 text-3xl font-bold text-[#B22222]">¥{(order.payableMinor / 100).toFixed(2)}</p>
     {qr && !expired && <img src={qr} alt="本订单付款二维码" className="mx-auto w-60 rounded-xl" />}
+    {order.provider === 'wechat' && order.codeUrl && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) && !/MicroMessenger/i.test(navigator.userAgent) && <p className="mt-3 text-sm text-[#B22222]">请用另一台设备的微信扫描二维码付款。本机付款请从微信打开网站，当前浏览器无法直接调起微信支付。</p>}
     {!expired && (order.redirectUrl || order.jsapi) && <button onClick={launch} className="my-4 w-full rounded-xl bg-[#B22222] py-3 font-bold text-white">立即付款</button>}
     <p role="status" className="mt-4 text-sm text-[#2C2C2C]/70">{message}</p>
     <button className="mt-4 text-sm underline" onClick={async () => { try { const data = await paymentRequest(`/api/payments/orders/${order.orderId}?token=${encodeURIComponent(order.accessToken)}`); if (data.status === 'paid') onPaid(data); else setMessage('暂未确认付款，请稍后再次查询。'); } catch (error) { setMessage(error.message); } }}>查询付款结果</button>
