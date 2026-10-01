@@ -6,7 +6,7 @@
 
 复制 `deploy/payment.env.example` 为 `payment.env`，填写真实值，上传到服务器 `/opt/zenbazi/payment.env`。不要覆盖数据库配置或原来的 `.env.local`。该文件不可提交 GitHub。上传后执行 `chmod 600 /opt/zenbazi/payment.env` 和 `systemctl restart zenbazi` 才会加载。
 
-私钥、公钥以 PEM 格式填写一整行，用字面的 `\n` 表示换行。微信 API v3 密钥为 32 字节；序列号是商户证书序列号；支付公钥 ID 与微信支付公钥必须匹配。公众号 AppSecret 不是 API v3 密钥。
+私钥、公钥保留 PEM 的真实换行，整个多行值加双引号（开始标记前和结束标记后各一个）。不要把裸 PEM 分散成没有引号的多行，也不要在当前服务器的 systemd 配置中使用字面的 `\n`，该服务器读取时会丢掉反斜杠。微信 API v3 密钥为 32 字节；序列号是商户证书序列号；支付公钥 ID 与微信支付公钥必须匹配。公众号 AppSecret 不是 API v3 密钥。
 
 ## 平台端设置
 
