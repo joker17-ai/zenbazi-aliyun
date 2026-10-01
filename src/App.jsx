@@ -725,8 +725,6 @@ function App() {
       ];
   const paymentActionLabel = payableCny === 0 ? paymentCopy.unlockFree : paymentCopy.unlockPaid;
   // 真实收款二维码映射：(语言地区, 支付方式) -> 图片路径
-  const paymentQrSrc = '';
-  const paymentQrAmount = useGlobalPaymentMethods ? 128 : 68;
 
   if (route === 'admin') {
     return (
@@ -1401,28 +1399,12 @@ function App() {
                                {useGlobalPaymentMethods ? (lang === 'en' ? 'Payment QR Code' : '支付二维码') : (lang === 'en' ? 'Payment QR Code' : '支付二维码')}
                              </div>
                              <div className="flex flex-col items-center justify-center p-4 bg-gray-50 rounded-xl border border-gray-200">
-                               {paymentQrSrc ? (
-                                 <>
-                                   <div className="w-56 h-56 rounded-xl overflow-hidden bg-white border border-[#2C2C2C]/10 shadow-sm">
-                                     <img src={paymentQrSrc} alt={paymentMethods.find((item) => item.id === paymentMethod)?.label || 'QR'} className="w-full h-full object-contain" />
-                                   </div>
-                                   <p className="mt-3 text-sm font-semibold text-[#2C2C2C] text-center">
-                                     {paymentMethods.find((item) => item.id === paymentMethod)?.label} · ¥{paymentQrAmount}
-                                   </p>
-                                   <p className="mt-1 text-xs text-[#B22222] text-center">
-                                     {paymentCopy.qrHint}
-                                   </p>
-                                 </>
-                               ) : (
-                                 <>
-                                   <div className="w-56 h-56 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center bg-white px-4 text-center">
-                                     <span className="text-sm text-[#2C2C2C]/50">选择支付方式，点击下方付款按钮即可打开收银台。</span>
-                                   </div>
-                                   <p className="mt-3 text-xs text-[#2C2C2C]/40 text-center">
-                                     付款成功后自动查询订单并打开报告。
-                                   </p>
-                                 </>
-                               )}
+                               <button type="button" onClick={handlePremiumPayment} disabled={isPaymentSubmitting}
+                                 className="w-full rounded-xl bg-[#B22222] px-5 py-4 font-bold text-white disabled:opacity-60">
+                                 {isPaymentSubmitting ? '正在生成付款订单…' : paymentMethod === 'wechat' ? (/MicroMessenger/i.test(navigator.userAgent) ? '打开微信支付' : '生成微信付款二维码') : '打开支付宝收银台'}
+                               </button>
+                               <p className="mt-3 text-xs text-[#2C2C2C]/60 text-center">点击后生成本订单专属付款入口，金额以收银台显示为准。付款成功后自动查询订单并打开报告。</p>
+                               {error && <p role="alert" className="mt-3 text-sm text-[#B22222]">{error}</p>}
                              </div>
                            </div>
 
